@@ -11,11 +11,29 @@ from pathlib import Path
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import threading
+
 import gradio as gr
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from brickognize.pipeline import analyze_image
+
+# Preload SAM model in background so first request is faster
+def _preload():
+    try:
+        from brickognize.pipeline import _find_sam_model
+        from ml.detector import preload_sam
+        from pathlib import Path
+        project_root = Path(__file__).resolve().parent
+        sam_path = _find_sam_model(project_root)
+        if sam_path:
+            print("Preloading SAM model...", flush=True)
+            preload_sam(sam_path)
+            print("SAM model loaded.", flush=True)
+    except Exception as e:
+        print(f"Preload failed (will load on first request): {e}", flush=True)
+
+threading.Thread(target=_preload, daemon=True).start()
 
 
 def draw_detections(image: Image.Image, result) -> Image.Image:

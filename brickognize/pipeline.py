@@ -168,14 +168,14 @@ def _merge_overlapping_detections(
 
 def _find_sam_model(project_root: Path) -> Optional[str]:
     """Find SAM model locally, or return name for auto-download."""
-    for name in ("sam2.1_b.pt", "sam2.1_l.pt", "sam_b.pt"):
+    for name in ("sam2.1_t.pt", "sam2.1_b.pt", "sam2.1_l.pt", "sam_b.pt"):
         path = project_root / name
         if path.exists():
             return str(path)
     # On cloud (HF Spaces etc.), ultralytics auto-downloads by name
     import os
     if os.environ.get("HF_SPACES") or os.environ.get("SPACE_ID"):
-        return "sam2.1_b.pt"
+        return "sam2.1_t.pt"
     return None
 
 
@@ -276,24 +276,26 @@ def analyze_image(
     # --- Step 1b: Merge overlapping/adjacent detections ---
     raw_detections = _merge_overlapping_detections(raw_detections, img_array)
 
-    # --- Step 2: Identify each crop via Brickognize API ---
-    detections: list[Detection] = []
+    # --- Step 2: Identify each crop via Brickognize API (parallel) ---
+    from concurrent.futures import ThreadPoolExecutor
 
-    for i, det in enumerate(raw_detections):
+    def _identify_one(args):
+        i, det = args
         crop_img = Image.fromarray(det.crop)
-
         try:
             results = identify(crop_img)
         except Exception as e:
             print(f"  Brickognize API error for det_{i}: {e}")
             results = []
-
-        detections.append(Detection(
+        return Detection(
             detection_id=f"det_{i}",
             bbox=det.bbox,
             detection_confidence=det.confidence,
             results=results[:top_k],
-        ))
+        )
+
+    with ThreadPoolExecutor(max_workers=min(8, len(raw_detections))) as pool:
+        detections = list(pool.map(_identify_one, enumerate(raw_detections)))
 
     # --- Step 2b: Fallback — if all scores are low, try the full image ---
     best_score = 0.0
